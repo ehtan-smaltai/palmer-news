@@ -22,9 +22,20 @@ Usage: python run_pipeline.py
 from __future__ import annotations
 
 import json
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Windows console defaults to a codepage (cp1252 etc.) that can't represent
+# most non-ASCII characters — confirmed crash 2026-08-26 on a Czech name
+# from sports coverage (UnicodeEncodeError killed the whole run mid-tick).
+# With global sports/entertainment sources now in the mix, non-ASCII names
+# are routine, not an edge case — reconfigure stdout/stderr to UTF-8 with
+# a safe fallback so a print() call can never crash the pipeline.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from dotenv import load_dotenv
 
@@ -32,6 +43,7 @@ ENV_PATH = Path(__file__).parent / ".env"
 load_dotenv(ENV_PATH)
 
 from build_site import (
+    ARTICLE_CATEGORIES,
     render_page,
     write_article_page,
     write_category_page,
@@ -81,15 +93,19 @@ def _to_db_row(a: dict, matched_market: dict | None, corro: dict) -> dict:
     }
 
 
-def run() -> dict:
+def run(sources: list[str] | None = None) -> dict:
+    """`sources`, if given, restricts this run to just those feed names —
+    see scheduler_loop.py's staggered scheduling. Matching, rendering, and
+    all category/SEO pages still run every call regardless, so whatever
+    this tick's sources bring in shows up immediately."""
     conn = get_conn()
     started_at = time.time()
     stats = {"fetched": 0, "clusters": 0, "new_stories": 0, "held_back": 0,
               "detail_generated": 0, "verify_failed": 0, "matched": 0,
               "skipped_existing": 0, "fallback_images": 0}
 
-    print("Fetching news from all sources...")
-    fetched = fetch_news(limit_per_feed=8)
+    print(f"Fetching news from {sources or 'all'} sources...")
+    fetched = fetch_news(limit_per_feed=8, sources=sources)
     stats["fetched"] = len(fetched)
     print(f"  {len(fetched)} articles across {len({a['source'] for a in fetched})} feeds")
 
@@ -155,7 +171,7 @@ def run() -> dict:
     out_path = write_page(html_out)
 
     print("Rendering category pages...")
-    for category in ("MARKET", "FINANCE", "TECHNOLOGY"):
+    for category in ARTICLE_CATEGORIES:
         cat_articles = recent_articles(conn, limit=30, category=category)
         write_category_page(category, cat_articles)
     write_prediction_page(markets)

@@ -26,6 +26,13 @@ import os
 import sys
 from pathlib import Path
 
+# See run_pipeline.py for why — Windows console encoding can't represent
+# most non-ASCII characters, routine now with global sports/entertainment
+# article titles.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import requests
 
 CONFIG_PATH = Path.home() / ".palmer_news" / "config.json"
@@ -165,7 +172,7 @@ def main() -> None:
     p_config.set_defaults(func=cmd_config)
 
     p_articles = sub.add_parser("articles", help="List articles")
-    p_articles.add_argument("--category", choices=["MARKET", "FINANCE", "TECHNOLOGY"])
+    p_articles.add_argument("--category", choices=["MARKET", "FINANCE", "TECHNOLOGY", "ENTERTAINMENT", "SPORTS"])
     p_articles.add_argument("--q", help="Keyword search")
     p_articles.add_argument("--limit", type=int, default=20)
     p_articles.add_argument("--offset", type=int, default=0)

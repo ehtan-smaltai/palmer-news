@@ -29,11 +29,18 @@ MEDIA_NS = "{http://search.yahoo.com/mrss/}"
 FEEDS = {
     "bbc_world": ("https://feeds.bbci.co.uk/news/world/rss.xml", "MARKET", "bbc"),
     "bbc_business": ("https://feeds.bbci.co.uk/news/business/rss.xml", "FINANCE", "bbc"),
+    "ft": ("https://www.ft.com/rss/home/international", "FINANCE", "ft"),
     "bbc_technology": ("https://feeds.bbci.co.uk/news/technology/rss.xml", "TECHNOLOGY", "bbc"),
     "guardian_world": ("https://www.theguardian.com/world/rss", "MARKET", "guardian"),
     "aljazeera": ("https://www.aljazeera.com/xml/rss/all.xml", "MARKET", "aljazeera"),
     "cnn_world": ("https://rss.cnn.com/rss/cnn_world.rss", "MARKET", "cnn"),
     "france24": ("https://www.france24.com/en/rss", "MARKET", "france24"),
+    "variety": ("http://variety.com/feed/", "ENTERTAINMENT", "variety"),
+    "deadline": ("http://deadline.com/feed/", "ENTERTAINMENT", "deadline"),
+    "vulture": ("http://feeds.feedburner.com/nymag/vulture", "ENTERTAINMENT", "vulture"),
+    "espn": ("http://sports.espn.go.com/espn/rss/news", "SPORTS", "espn"),
+    "yahoo_sports": ("https://sports.yahoo.com/top/rss.xml", "SPORTS", "yahoo"),
+    "guardian_sports": ("http://www.theguardian.com/sport/us-sport/rss", "SPORTS", "guardian"),
 }
 
 
@@ -81,9 +88,14 @@ def _parse_feed(source: str, url: str, category: str, corro_source: str, limit: 
     return items
 
 
-def fetch_news(limit_per_feed: int = 8) -> list[dict[str, Any]]:
+def fetch_news(limit_per_feed: int = 8, sources: list[str] | None = None) -> list[dict[str, Any]]:
+    """`sources`, if given, restricts fetching to just those feed names (see
+    scheduler_loop.py's staggered scheduling — different subsets get
+    checked on different ticks so the site updates in a steady trickle
+    rather than one big batch every 30 minutes)."""
+    active_feeds = {k: v for k, v in FEEDS.items() if sources is None or k in sources}
     articles = []
-    for source, (url, category, corro_source) in FEEDS.items():
+    for source, (url, category, corro_source) in active_feeds.items():
         articles.extend(_parse_feed(source, url, category, corro_source, limit_per_feed))
     return articles
 

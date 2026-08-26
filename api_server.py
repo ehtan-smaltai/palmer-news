@@ -16,8 +16,16 @@ Or: uvicorn api_server:app --reload
 """
 from __future__ import annotations
 
+import sys
 from datetime import datetime, timezone
 from typing import Optional
+
+# See run_pipeline.py for why — Windows console encoding can't represent
+# most non-ASCII characters (confirmed crash on a Czech name), and this
+# is now routine with global sports/entertainment sources in the mix.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from dotenv import load_dotenv
 
@@ -27,7 +35,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Qu
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from build_site import BASE_URL, _iso_when
+from build_site import ARTICLE_CATEGORIES, BASE_URL, _iso_when
 from fetch_polymarket import fetch_polymarket_markets
 from store import get_article_by_slug, get_cached_markets, get_conn, save_markets, validate_api_key
 
@@ -156,12 +164,12 @@ def root():
 
 @app.get("/api/categories", tags=["meta"], dependencies=[Depends(require_api_key)])
 def categories():
-    return {"categories": ["MARKET", "FINANCE", "TECHNOLOGY"]}
+    return {"categories": ARTICLE_CATEGORIES}
 
 
 @app.get("/api/articles", response_model=ArticlesPage, tags=["articles"], dependencies=[Depends(require_api_key)])
 def list_articles(
-    category: Optional[str] = Query(None, description="Filter by MARKET, FINANCE, or TECHNOLOGY"),
+    category: Optional[str] = Query(None, description=f"Filter by one of: {', '.join(ARTICLE_CATEGORIES)}"),
     q: Optional[str] = Query(None, description="Keyword search across headline and summary "
                               "(case-insensitive substring match)"),
     limit: int = Query(20, ge=1, le=200),
@@ -172,8 +180,8 @@ def list_articles(
 ):
     conn = get_conn()
     category_norm = category.upper() if category else None
-    if category_norm and category_norm not in ("MARKET", "FINANCE", "TECHNOLOGY"):
-        raise HTTPException(400, "category must be MARKET, FINANCE, or TECHNOLOGY")
+    if category_norm and category_norm not in ARTICLE_CATEGORIES:
+        raise HTTPException(400, f"category must be one of: {', '.join(ARTICLE_CATEGORIES)}")
 
     where = ["held_back = 0"]
     params: list = []

@@ -22,8 +22,11 @@ CATEGORY_PAGES = {
     "MARKET": "market.html",
     "FINANCE": "finance.html",
     "TECHNOLOGY": "technology.html",
+    "ENTERTAINMENT": "entertainment.html",
+    "SPORTS": "sports.html",
     "PREDICTION": "prediction.html",
 }
+ARTICLE_CATEGORIES = ["MARKET", "FINANCE", "TECHNOLOGY", "ENTERTAINMENT", "SPORTS"]
 
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_FILE = OUTPUT_DIR / "index.html"
