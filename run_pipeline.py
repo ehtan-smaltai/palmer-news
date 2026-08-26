@@ -68,6 +68,13 @@ from store import existing_guids, get_conn, recent_articles, save_article
 
 RUN_LOG = Path(__file__).parent / "data" / "run_log.jsonl"
 
+# Polymarket Gamma API tag ids (numeric — the string tag/tag_slug params
+# don't actually filter, confirmed 2026-08-26). Found via /tags sorted by
+# id; these are the ones with live markets as of that date.
+POLYMARKET_TAG_SPORTS = 1
+POLYMARKET_TAG_MOVIES = 53
+POLYMARKET_TAG_MUSIC = 100
+
 
 def _to_db_row(a: dict, matched_market: dict | None, corro: dict) -> dict:
     return {
@@ -115,8 +122,26 @@ def run(sources: list[str] | None = None) -> dict:
     print(f"  {len(fetched)} articles -> {len(clusters)} distinct stories")
 
     print("Fetching Polymarket markets...")
-    markets = fetch_polymarket_markets(limit=80)
-    print(f"  {len(markets)} markets")
+    # Plain top-volume-overall is dominated by politics/macro/crypto —
+    # confirmed 2026-08-26 it was starving Sports/Entertainment articles of
+    # real match candidates. Combine it with category-tagged pools so those
+    # articles have something relevant to match against. Deduped by id;
+    # order preserved (general pool first) so matching's index-based
+    # response still lines up.
+    general = fetch_polymarket_markets(limit=80)
+    sports = fetch_polymarket_markets(limit=30, tag_id=POLYMARKET_TAG_SPORTS)
+    movies = fetch_polymarket_markets(limit=15, tag_id=POLYMARKET_TAG_MOVIES)
+    music = fetch_polymarket_markets(limit=15, tag_id=POLYMARKET_TAG_MUSIC)
+
+    seen_ids = set()
+    markets = []
+    for pool in (general, sports, movies, music):
+        for m in pool:
+            if m["id"] not in seen_ids:
+                seen_ids.add(m["id"])
+                markets.append(m)
+    print(f"  {len(markets)} markets ({len(general)} general + {len(sports)} sports + "
+          f"{len(movies)} movies + {len(music)} music, deduped)")
 
     already_seen = existing_guids(conn)
 

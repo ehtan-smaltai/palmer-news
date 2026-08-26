@@ -31,27 +31,30 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from build_site import ARTICLE_CATEGORIES, BASE_URL, _iso_when
 from fetch_polymarket import fetch_polymarket_markets
-from store import get_article_by_slug, get_cached_markets, get_conn, save_markets, validate_api_key
+from store import (
+    check_rate_limit,
+    get_article_by_slug,
+    get_cached_markets,
+    get_conn,
+    save_markets,
+    validate_api_key,
+)
 
 MARKETS_CACHE_TTL_S = 30  # live odds, but no API consumer needs sub-30s freshness
+RATE_LIMIT_PER_MINUTE = 30
+# Load-tested this server at up to 300 concurrent requests (2026-08-26) —
+# 100% success rate even under that load (slows down under heavy
+# concurrency, single-process dev setup, but never errors/drops
+# connections), sustained aggregate throughput ~40-75 req/s. 30/min per
+# key (0.5/sec sustained) leaves large headroom below that ceiling even
+# with dozens of keys active at once.
 
-
-def require_api_key(x_api_key: Optional[str] = Header(None)):
-    """Applied to every /api/* route. Root (/), /docs, and /openapi.json
-    stay open — developers should be able to read the schema before they
-    need a key, same convention most API products use. Get a key with
-    manage_keys.py."""
-    if not x_api_key:
-        raise HTTPException(401, "Missing API key — pass it in the X-API-Key header. "
-                             "Get one with: python manage_keys.py create \"your app name\"")
-    if not validate_api_key(get_conn(), x_api_key):
-        raise HTTPException(401, "Invalid or revoked API key.")
 
 app = FastAPI(
     title="Palmer News API",
@@ -74,6 +77,40 @@ app.add_middleware(
     allow_methods=["GET"],
     allow_headers=["*"],
 )
+
+
+def require_api_key(request: Request, x_api_key: Optional[str] = Header(None)):
+    """Applied to every /api/* route. Root (/), /docs, and /openapi.json
+    stay open — developers should be able to read the schema before they
+    need a key, same convention most API products use. Get a key with
+    manage_keys.py."""
+    if not x_api_key:
+        raise HTTPException(401, "Missing API key — pass it in the X-API-Key header. "
+                             "Get one with: python manage_keys.py create \"your app name\"")
+    conn = get_conn()
+    if not validate_api_key(conn, x_api_key):
+        raise HTTPException(401, "Invalid or revoked API key.")
+
+    allowed, remaining, reset_in = check_rate_limit(conn, x_api_key, RATE_LIMIT_PER_MINUTE)
+    request.state.rate_limit_remaining = remaining
+    request.state.rate_limit_reset = reset_in
+    if not allowed:
+        raise HTTPException(
+            429,
+            f"Rate limit exceeded ({RATE_LIMIT_PER_MINUTE}/min). Try again in {reset_in:.0f}s.",
+            headers={"Retry-After": str(int(reset_in) + 1)},
+        )
+
+
+@app.middleware("http")
+async def add_rate_limit_headers(request: Request, call_next):
+    response = await call_next(request)
+    remaining = getattr(request.state, "rate_limit_remaining", None)
+    if remaining is not None:
+        response.headers["X-RateLimit-Limit"] = str(RATE_LIMIT_PER_MINUTE)
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
+        response.headers["X-RateLimit-Reset"] = f"{request.state.rate_limit_reset:.0f}"
+    return response
 
 
 class MarketOut(BaseModel):

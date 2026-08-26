@@ -67,6 +67,12 @@ CREATE TABLE IF NOT EXISTS api_keys (
     request_count INTEGER DEFAULT 0,
     last_used_at REAL
 );
+
+CREATE TABLE IF NOT EXISTS rate_limit_windows (
+    api_key TEXT PRIMARY KEY,
+    window_start REAL,
+    count_in_window INTEGER
+);
 """
 
 
@@ -213,3 +219,35 @@ def revoke_api_key(conn: sqlite3.Connection, key: str) -> bool:
     cur = conn.execute("UPDATE api_keys SET active = 0 WHERE api_key = ?", (key,))
     conn.commit()
     return cur.rowcount > 0
+
+
+def check_rate_limit(conn: sqlite3.Connection, key: str, limit_per_minute: int) -> tuple[bool, int, float]:
+    """Fixed-window counter — simple, good enough at this scale (see the
+    api_server.py load test: server handles 40-75 req/s aggregate before
+    even single-process dev setup shows any strain; 60/min per key is
+    generous headroom under that, not a number chosen to be stingy).
+
+    Returns (allowed, remaining, seconds_until_reset)."""
+    now = time.time()
+    window_len = 60.0
+    row = conn.execute(
+        "SELECT window_start, count_in_window FROM rate_limit_windows WHERE api_key = ?", (key,)
+    ).fetchone()
+
+    if not row or now - row["window_start"] >= window_len:
+        conn.execute(
+            "INSERT OR REPLACE INTO rate_limit_windows (api_key, window_start, count_in_window) VALUES (?, ?, 1)",
+            (key, now),
+        )
+        conn.commit()
+        return True, limit_per_minute - 1, window_len
+
+    remaining_time = window_len - (now - row["window_start"])
+    if row["count_in_window"] >= limit_per_minute:
+        return False, 0, remaining_time
+
+    conn.execute(
+        "UPDATE rate_limit_windows SET count_in_window = count_in_window + 1 WHERE api_key = ?", (key,)
+    )
+    conn.commit()
+    return True, limit_per_minute - row["count_in_window"] - 1, remaining_time

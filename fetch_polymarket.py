@@ -22,13 +22,20 @@ from lambda_relay import relay_get
 GAMMA_MARKETS_URL = "https://gamma-api.polymarket.com/markets"
 
 
-def fetch_polymarket_markets(limit: int = 25) -> list[dict[str, Any]]:
+def fetch_polymarket_markets(limit: int = 25, tag_id: int | None = None) -> list[dict[str, Any]]:
     """Fetch the top `limit` open markets by volume.
+
+    `tag_id` restricts to a category (confirmed 2026-08-26: the Gamma API's
+    `tag`/`tag_slug` string params are silently ignored — only the numeric
+    `tag_id` actually filters). Known useful ids: 1=Sports, 53=Movies,
+    100=Music. Without this, the plain top-volume-overall list is
+    dominated by politics/macro/crypto, which starved Sports/Entertainment
+    articles of real match candidates — see run_pipeline.py's combined
+    pool.
 
     Degrades gracefully: on any network/parse error (direct AND relay),
     returns an empty list with the error printed, rather than raising and
-    killing the whole page build (Kalshi or the rest of the page should
-    still render).
+    killing the whole page build.
     """
     params = {
         "active": "true",
@@ -37,6 +44,8 @@ def fetch_polymarket_markets(limit: int = 25) -> list[dict[str, Any]]:
         "order": "volume",
         "ascending": "false",
     }
+    if tag_id is not None:
+        params["tag_id"] = tag_id
     raw = None
     try:
         # Short timeout deliberately — on networks where direct access is

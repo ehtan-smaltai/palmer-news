@@ -345,11 +345,16 @@ def render_page(articles: list[dict], markets: list[dict], finance_quotes: list[
     `finance_quotes` is accepted but not rendered (Finance strip removed
     per founder feedback until there's a real live-market view worth
     showing, not just numbers) — kept as a parameter so callers don't need
-    to change, just pass None/[] and nothing breaks."""
-    matched_first = sorted(articles, key=lambda a: a.get("matched_market") is None)
-    hero = matched_first[0] if matched_first else None
-    side = matched_first[1:5]
-    grid = matched_first[5:14]
+    to change, just pass None/[] and nothing breaks.
+
+    `articles` is expected pre-sorted newest-first (recent_articles() does
+    this via ORDER BY first_seen DESC) — this function preserves that
+    order rather than re-sorting, per founder feedback: latest news first,
+    not "matched-market articles bubble to the top regardless of age"
+    (which is what an earlier version of this function did)."""
+    hero = articles[0] if articles else None
+    side = articles[1:5]
+    grid = articles[5:14]
 
     hero_html = _article_html(hero, "hero") if hero else '<div class="hero-story"><p>No stories fetched.</p></div>'
     side_html = "\n".join(_article_html(a, "small") for a in side)
