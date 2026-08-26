@@ -1,0 +1,182 @@
+"""The real pipeline entrypoint. Each run:
+
+1. Fetches all news sources + live Polymarket markets. (Finance/stock
+   quotes are fetched separately by fetch_finance.py but not wired into
+   this run right now — see note below.)
+2. Clusters articles covering the same real-world event across outlets
+   (corroboration.cluster_articles), and gates volatile/single-source
+   stories (evaluate_cluster).
+3. Only genuinely NEW stories (primary guid not already in the local store)
+   get the expensive treatment: a detailed, multi-source-grounded article
+   (detail_article.py) with a verify pass, then market matching. Already-
+   seen stories are skipped (no repeat LLM billing) but their held-back
+   status is refreshed in case a second source has since corroborated them.
+4. Persists everything to SQLite (store.py) and writes a per-story detail
+   page to output/articles/{slug}.html — the homepage links there now
+   (internal permalink), not to the source outlet.
+5. Renders the homepage from accumulated history and writes a run-log line
+   for basic monitoring.
+
+Usage: python run_pipeline.py
+"""
+from __future__ import annotations
+
+import json
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+ENV_PATH = Path(__file__).parent / ".env"
+load_dotenv(ENV_PATH)
+
+from build_site import (
+    render_page,
+    write_article_page,
+    write_category_page,
+    write_llms_txt,
+    write_page,
+    write_prediction_page,
+    write_robots_txt,
+    write_sitemap,
+)
+from corroboration import cluster_articles, evaluate_cluster
+from detail_article import build_detail_article, select_primary
+from fetch_news import fetch_news
+from fetch_pexels import fetch_fallback_image
+from fetch_polymarket import fetch_polymarket_markets
+from match_article_to_market import match_article
+from store import existing_guids, get_conn, recent_articles, save_article
+
+# Finance (stock quotes) is deliberately not fetched/rendered right now —
+# founder feedback: no point showing plain numbers until there's a real
+# live-market view worth building. fetch_finance.py still works standalone
+# if this gets revisited.
+
+RUN_LOG = Path(__file__).parent / "data" / "run_log.jsonl"
+
+
+def _to_db_row(a: dict, matched_market: dict | None, corro: dict) -> dict:
+    return {
+        "guid": a["guid"],
+        "source": a["source"],
+        "category": a["category"],
+        "title": a["title"],
+        "description": a.get("description"),
+        "link": a.get("link"),
+        "image_url": a.get("image_url"),
+        "pub_date": a.get("pub_date"),
+        "rewritten_title": a.get("rewritten_title"),
+        "rewritten_summary": a.get("rewritten"),
+        "detail_body": a.get("detail_body"),
+        "slug": a.get("slug"),
+        "source_count": a.get("source_count", 1),
+        "verify_status": a.get("verify_status", "not_attempted"),
+        "corroborated": int(corro["corroborated"]),
+        "held_back": int(corro["held_back"]),
+        "hold_reason": corro["hold_reason"],
+        "matched_market_json": json.dumps(matched_market) if matched_market else None,
+        "first_seen": a.get("first_seen", time.time()),
+    }
+
+
+def run() -> dict:
+    conn = get_conn()
+    started_at = time.time()
+    stats = {"fetched": 0, "clusters": 0, "new_stories": 0, "held_back": 0,
+              "detail_generated": 0, "verify_failed": 0, "matched": 0,
+              "skipped_existing": 0, "fallback_images": 0}
+
+    print("Fetching news from all sources...")
+    fetched = fetch_news(limit_per_feed=8)
+    stats["fetched"] = len(fetched)
+    print(f"  {len(fetched)} articles across {len({a['source'] for a in fetched})} feeds")
+
+    print("Clustering into stories...")
+    clusters = cluster_articles(fetched)
+    stats["clusters"] = len(clusters)
+    print(f"  {len(fetched)} articles -> {len(clusters)} distinct stories")
+
+    print("Fetching Polymarket markets...")
+    markets = fetch_polymarket_markets(limit=80)
+    print(f"  {len(markets)} markets")
+
+    already_seen = existing_guids(conn)
+
+    for cluster in clusters:
+        corro = evaluate_cluster(cluster)
+        primary_guid = select_primary(cluster)["guid"]
+
+        if corro["held_back"]:
+            stats["held_back"] += 1
+
+        if primary_guid in already_seen:
+            stats["skipped_existing"] += 1
+            conn.execute(
+                "UPDATE articles SET corroborated = ?, held_back = ?, hold_reason = ? WHERE guid = ?",
+                (int(corro["corroborated"]), int(corro["held_back"]), corro["hold_reason"], primary_guid),
+            )
+            conn.commit()
+            continue
+
+        stats["new_stories"] += 1
+        if corro["held_back"]:
+            primary = select_primary(cluster)
+            primary["first_seen"] = time.time()
+            save_article(conn, _to_db_row(primary, None, corro))
+            continue
+
+        story = build_detail_article(cluster)
+        story["first_seen"] = time.time()
+        stats["detail_generated"] += 1
+
+        if not story.get("image_url"):
+            fallback_img = fetch_fallback_image(conn, story)
+            if fallback_img:
+                story["image_url"] = fallback_img
+                story["image_is_fallback"] = True
+                stats["fallback_images"] = stats.get("fallback_images", 0) + 1
+        if story.get("verify_status") == "failed":
+            stats["verify_failed"] += 1
+
+        matched_market = match_article(story, markets)
+        if matched_market:
+            stats["matched"] += 1
+
+        save_article(conn, _to_db_row(story, matched_market, corro))
+
+        if story.get("detail_body") and story.get("slug"):
+            write_article_page(story, matched_market)
+
+    print("Rendering homepage from accumulated history...")
+    articles_for_render = recent_articles(conn, limit=40)
+    html_out = render_page(articles_for_render, markets, finance_quotes=None)
+    out_path = write_page(html_out)
+
+    print("Rendering category pages...")
+    for category in ("MARKET", "FINANCE", "TECHNOLOGY"):
+        cat_articles = recent_articles(conn, limit=30, category=category)
+        write_category_page(category, cat_articles)
+    write_prediction_page(markets)
+
+    print("Writing SEO files (robots.txt, sitemap.xml, llms.txt)...")
+    write_robots_txt()
+    write_sitemap(articles_for_render)
+    write_llms_txt()
+
+    stats["duration_s"] = round(time.time() - started_at, 1)
+    stats["rendered_from_history"] = len(articles_for_render)
+    stats["output"] = str(out_path)
+    stats["ts"] = datetime.now(timezone.utc).isoformat()
+
+    RUN_LOG.parent.mkdir(exist_ok=True)
+    with open(RUN_LOG, "a", encoding="utf-8") as f:
+        f.write(json.dumps(stats) + "\n")
+
+    print(f"\nRun complete in {stats['duration_s']}s: {stats}")
+    return stats
+
+
+if __name__ == "__main__":
+    run()
