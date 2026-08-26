@@ -54,6 +54,17 @@ python api_server.py         # serves the JSON API on http://localhost:8420
 Open `output/index.html` directly in a browser for the human-facing site,
 or hit `http://localhost:8420/docs` for the interactive API schema.
 
+### API keys
+
+All `/api/*` endpoints require a key in the `X-API-Key` header (`/`, `/docs`,
+and `/openapi.json` stay open so you can read the schema first).
+
+```bash
+python manage_keys.py create "your app name"   # prints a new key, shown once
+python manage_keys.py list                     # usage per key (masked)
+python manage_keys.py revoke <key>              # deactivate a key
+```
+
 ## Architecture notes worth knowing before touching this
 
 - **Network**: Polymarket's API is unreachable from some networks (confirmed

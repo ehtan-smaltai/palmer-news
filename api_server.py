@@ -23,13 +23,27 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from build_site import BASE_URL, _iso_when
 from fetch_polymarket import fetch_polymarket_markets
-from store import get_article_by_slug, get_conn
+from store import get_article_by_slug, get_cached_markets, get_conn, save_markets, validate_api_key
+
+MARKETS_CACHE_TTL_S = 30  # live odds, but no API consumer needs sub-30s freshness
+
+
+def require_api_key(x_api_key: Optional[str] = Header(None)):
+    """Applied to every /api/* route. Root (/), /docs, and /openapi.json
+    stay open — developers should be able to read the schema before they
+    need a key, same convention most API products use. Get a key with
+    manage_keys.py."""
+    if not x_api_key:
+        raise HTTPException(401, "Missing API key — pass it in the X-API-Key header. "
+                             "Get one with: python manage_keys.py create \"your app name\"")
+    if not validate_api_key(get_conn(), x_api_key):
+        raise HTTPException(401, "Invalid or revoked API key.")
 
 app = FastAPI(
     title="Palmer News API",
@@ -135,17 +149,21 @@ def root():
         "note": "This is a development-stage project — content is AI-generated "
                 "with no human editorial review. See each article's verify_status "
                 "and corroborated fields before treating it as reliable.",
+        "auth": "All /api/* endpoints require an API key in the X-API-Key header. "
+                "Get one with: python manage_keys.py create \"your app name\"",
     }
 
 
-@app.get("/api/categories", tags=["meta"])
+@app.get("/api/categories", tags=["meta"], dependencies=[Depends(require_api_key)])
 def categories():
     return {"categories": ["MARKET", "FINANCE", "TECHNOLOGY"]}
 
 
-@app.get("/api/articles", response_model=ArticlesPage, tags=["articles"])
+@app.get("/api/articles", response_model=ArticlesPage, tags=["articles"], dependencies=[Depends(require_api_key)])
 def list_articles(
     category: Optional[str] = Query(None, description="Filter by MARKET, FINANCE, or TECHNOLOGY"),
+    q: Optional[str] = Query(None, description="Keyword search across headline and summary "
+                              "(case-insensitive substring match)"),
     limit: int = Query(20, ge=1, le=200),
     offset: int = Query(0, ge=0),
     since: Optional[str] = Query(None, description="ISO 8601 timestamp — only articles first "
@@ -162,6 +180,10 @@ def list_articles(
     if category_norm:
         where.append("category = ?")
         params.append(category_norm)
+    if q:
+        where.append("(rewritten_title LIKE ? OR title LIKE ? OR rewritten_summary LIKE ?)")
+        like = f"%{q}%"
+        params.extend([like, like, like])
     if since:
         try:
             since_ts = datetime.fromisoformat(since).timestamp()
@@ -187,7 +209,7 @@ def list_articles(
     return ArticlesPage(count=total, limit=limit, offset=offset, articles=articles)
 
 
-@app.get("/api/articles/{slug}", response_model=ArticleDetail, tags=["articles"])
+@app.get("/api/articles/{slug}", response_model=ArticleDetail, tags=["articles"], dependencies=[Depends(require_api_key)])
 def article_detail(slug: str):
     conn = get_conn()
     row = get_article_by_slug(conn, slug)
@@ -209,11 +231,41 @@ def article_detail(slug: str):
     )
 
 
-@app.get("/api/markets", tags=["markets"])
-def markets(limit: int = Query(40, ge=1, le=200)):
-    """Live Polymarket data, fetched fresh on each call (not cached) — these
-    are supposed to be current odds, not a stale snapshot."""
-    return {"count": None, "markets": fetch_polymarket_markets(limit=limit)}
+def _refresh_markets_cache(cache_key: str, limit: int) -> None:
+    """Runs after the response is already sent (BackgroundTasks) — refreshes
+    the cache for next time without making the current caller wait."""
+    conn = get_conn()
+    fresh = fetch_polymarket_markets(limit=limit)
+    if fresh:
+        save_markets(conn, cache_key, fresh)
+
+
+@app.get("/api/markets", tags=["markets"], dependencies=[Depends(require_api_key)])
+def markets(background_tasks: BackgroundTasks, limit: int = Query(40, ge=1, le=200)):
+    """Stale-while-revalidate: always serve instantly from cache (even a
+    stale one) and refresh in the background, rather than ever blocking a
+    request on a live Polymarket fetch. Measured live-fetch latency was
+    ~9-13s (direct connection fails on this network, falls back to a
+    Lambda relay) — unacceptable to put in the request path for an API
+    whose whole pitch is being faster than the slow incumbents. Only the
+    very first-ever request (no cache at all yet) pays that cost; every
+    request after that is sub-20ms regardless of freshness."""
+    conn = get_conn()
+    cache_key = f"limit={limit}"
+
+    fresh_cached = get_cached_markets(conn, cache_key, MARKETS_CACHE_TTL_S)
+    if fresh_cached is not None:
+        return {"count": len(fresh_cached), "markets": fresh_cached, "cached": True, "stale": False}
+
+    stale_cached = get_cached_markets(conn, cache_key, max_age_s=10**9)  # any age
+    if stale_cached is not None:
+        background_tasks.add_task(_refresh_markets_cache, cache_key, limit)
+        return {"count": len(stale_cached), "markets": stale_cached, "cached": True, "stale": True}
+
+    # No cache at all yet (first-ever request) — nothing to serve, must block.
+    fresh = fetch_polymarket_markets(limit=limit)
+    save_markets(conn, cache_key, fresh)
+    return {"count": len(fresh), "markets": fresh, "cached": False, "stale": False}
 
 
 if __name__ == "__main__":

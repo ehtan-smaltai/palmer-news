@@ -39,7 +39,11 @@ def fetch_polymarket_markets(limit: int = 25) -> list[dict[str, Any]]:
     }
     raw = None
     try:
-        resp = requests.get(GAMMA_MARKETS_URL, params=params, timeout=8)
+        # Short timeout deliberately — on networks where direct access is
+        # blocked (confirmed for at least this dev machine), this fails
+        # fast so the relay fallback kicks in quickly instead of adding
+        # multiple seconds of dead wait on every cache-miss request.
+        resp = requests.get(GAMMA_MARKETS_URL, params=params, timeout=3)
         resp.raise_for_status()
         raw = resp.json()
     except Exception as exc:  # noqa: BLE001 - intentional broad catch, see docstring

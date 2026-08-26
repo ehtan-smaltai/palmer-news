@@ -52,6 +52,21 @@ CREATE TABLE IF NOT EXISTS image_cache (
     image_url TEXT,
     fetched_at REAL
 );
+
+CREATE TABLE IF NOT EXISTS market_cache (
+    cache_key TEXT PRIMARY KEY,
+    markets_json TEXT,
+    fetched_at REAL
+);
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    api_key TEXT PRIMARY KEY,
+    label TEXT,
+    created_at REAL,
+    active INTEGER DEFAULT 1,
+    request_count INTEGER DEFAULT 0,
+    last_used_at REAL
+);
 """
 
 
@@ -149,3 +164,52 @@ def save_image(conn: sqlite3.Connection, query: str, image_url: str) -> None:
         (query, image_url, time.time()),
     )
     conn.commit()
+
+
+def get_cached_markets(conn: sqlite3.Connection, cache_key: str, max_age_s: int) -> list | None:
+    row = conn.execute(
+        "SELECT markets_json, fetched_at FROM market_cache WHERE cache_key = ?", (cache_key,)
+    ).fetchone()
+    if not row or time.time() - row["fetched_at"] > max_age_s:
+        return None
+    return json.loads(row["markets_json"])
+
+
+def save_markets(conn: sqlite3.Connection, cache_key: str, markets: list) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO market_cache (cache_key, markets_json, fetched_at) VALUES (?, ?, ?)",
+        (cache_key, json.dumps(markets), time.time()),
+    )
+    conn.commit()
+
+
+def create_api_key(conn: sqlite3.Connection, key: str, label: str) -> None:
+    conn.execute(
+        "INSERT INTO api_keys (api_key, label, created_at, active, request_count) VALUES (?, ?, ?, 1, 0)",
+        (key, label, time.time()),
+    )
+    conn.commit()
+
+
+def validate_api_key(conn: sqlite3.Connection, key: str) -> bool:
+    """Also records usage (request_count, last_used_at) as a side effect —
+    every valid call is a use, not just a check."""
+    row = conn.execute("SELECT active FROM api_keys WHERE api_key = ?", (key,)).fetchone()
+    if not row or not row["active"]:
+        return False
+    conn.execute(
+        "UPDATE api_keys SET request_count = request_count + 1, last_used_at = ? WHERE api_key = ?",
+        (time.time(), key),
+    )
+    conn.commit()
+    return True
+
+
+def list_api_keys(conn: sqlite3.Connection) -> list[dict]:
+    return [dict(r) for r in conn.execute("SELECT * FROM api_keys ORDER BY created_at DESC")]
+
+
+def revoke_api_key(conn: sqlite3.Connection, key: str) -> bool:
+    cur = conn.execute("UPDATE api_keys SET active = 0 WHERE api_key = ?", (key,))
+    conn.commit()
+    return cur.rowcount > 0
