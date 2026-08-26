@@ -33,6 +33,7 @@ FEEDS = {
     "guardian_world": ("https://www.theguardian.com/world/rss", "MARKET", "guardian"),
     "aljazeera": ("https://www.aljazeera.com/xml/rss/all.xml", "MARKET", "aljazeera"),
     "cnn_world": ("https://rss.cnn.com/rss/cnn_world.rss", "MARKET", "cnn"),
+    "france24": ("https://www.france24.com/en/rss", "MARKET", "france24"),
 }
 
 
