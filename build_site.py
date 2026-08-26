@@ -50,7 +50,7 @@ def _img_html(a: dict, css_class: str, width: int) -> str:
     if not url:
         return ""
     url = _bbc_resize(url, width)
-    alt = html.escape(a["title"])
+    alt = html.escape(clean_title(a["title"]))
     return f'<img class="{css_class}" src="{html.escape(url)}" alt="{alt}" loading="lazy">'
 
 
@@ -131,6 +131,21 @@ def _permalink(a: dict, prefix: str = "") -> str | None:
     return f"{prefix}articles/{slug}.html" if slug else None
 
 
+_BYLINE_SUFFIX_RE = re.compile(r"\s*\|\s*[^|]+$")
+
+
+def clean_title(title: str) -> str:
+    """Strips a trailing `| Name` / `| Column name` suffix — some sources
+    (Guardian especially: "...| First Thing", "...| Lee Escobedo") bake a
+    byline or column name into the title itself. Bedrock-rewritten titles
+    never have this (they're generated fresh), but the raw-title fallback
+    used when a rewrite fails verification does — and letting a source's
+    own byline show up on our page conflicts with the "no visible
+    attribution" decision (see design doc, 2026-08-26). Applied wherever a
+    raw title is used as a display fallback, not just this one card."""
+    return _BYLINE_SUFFIX_RE.sub("", title).strip()
+
+
 def _truncate(text: str, max_chars: int) -> str:
     """Card-display truncation only — the stored data and detail-page body
     are never touched, this just keeps grid cards a consistent height.
@@ -150,7 +165,7 @@ def _article_html(a: dict, size: str, link_prefix: str = "") -> str:
     No per-article category tag (removed per founder feedback — the nav
     already carries category, no need to repeat it per card); a timestamp
     replaces it instead."""
-    title = html.escape(_truncate(a.get("rewritten_title") or a["title"], 140))
+    title = html.escape(_truncate(a.get("rewritten_title") or clean_title(a["title"]), 140))
     dek_limit = 280 if size == "hero" else 160
     dek = html.escape(_truncate(a.get("rewritten_summary") or a.get("rewritten") or a.get("description") or "", dek_limit))
     widget = _market_widget_html(a["matched_market"]) if a.get("matched_market") else ""
@@ -563,7 +578,8 @@ def _jsonld_for_article(story: dict, headline: str, description: str, body: str)
 
 
 def render_article_page(story: dict, matched_market: dict | None) -> str:
-    headline = html.escape(story.get("rewritten_title") or story["title"])
+    raw_headline = story.get("rewritten_title") or clean_title(story["title"])
+    headline = html.escape(raw_headline)
     dek = story.get("rewritten_summary") or story.get("rewritten") or story.get("description") or ""
     body = story.get("detail_body") or dek
     body_html = "".join(f"<p>{html.escape(p)}</p>" for p in body.split("\n\n") if p.strip())
@@ -572,12 +588,12 @@ def render_article_page(story: dict, matched_market: dict | None) -> str:
     sources = ", ".join(s.upper() for s in story.get("cluster_sources", [story.get("source", "unknown")]))
 
     head = _head_html(
-        title=f"{story.get('rewritten_title') or story['title']} — {SITE_NAME}",
+        title=f"{raw_headline} — {SITE_NAME}",
         description=dek[:200],
         canonical_path=f"articles/{story['slug']}.html",
         og_image=story.get("image_url"),
     )
-    jsonld = _jsonld_for_article(story, story.get("rewritten_title") or story["title"], dek, body)
+    jsonld = _jsonld_for_article(story, raw_headline, dek, body)
 
     return ARTICLE_TEMPLATE.format(
         head=head,

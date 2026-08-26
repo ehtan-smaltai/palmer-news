@@ -35,7 +35,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Qu
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from build_site import ARTICLE_CATEGORIES, BASE_URL, _iso_when
+from build_site import ARTICLE_CATEGORIES, BASE_URL, _iso_when, clean_title
 from fetch_polymarket import fetch_polymarket_markets
 from store import (
     check_rate_limit,
@@ -165,7 +165,7 @@ def _row_to_summary(row: dict) -> ArticleSummary:
     return ArticleSummary(
         slug=slug,
         category=row.get("category", ""),
-        headline=row.get("rewritten_title") or row.get("title", ""),
+        headline=row.get("rewritten_title") or clean_title(row.get("title", "")),
         summary=row.get("rewritten_summary") or row.get("description"),
         image_url=row.get("image_url"),
         published_at=_iso_when(row) or None,
