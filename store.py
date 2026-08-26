@@ -73,6 +73,23 @@ CREATE TABLE IF NOT EXISTS rate_limit_windows (
     window_start REAL,
     count_in_window INTEGER
 );
+
+CREATE TABLE IF NOT EXISTS podcast_episodes (
+    guid TEXT PRIMARY KEY,
+    source TEXT,
+    show_name TEXT,
+    show_link TEXT,
+    title TEXT,
+    description TEXT,
+    rewritten_title TEXT,
+    rewritten_summary TEXT,
+    audio_url TEXT,
+    duration TEXT,
+    image_url TEXT,
+    pub_date TEXT,
+    verify_status TEXT,
+    first_seen REAL
+);
 """
 
 
@@ -106,6 +123,30 @@ def save_article(conn: sqlite3.Connection, a: dict[str, Any]) -> None:
         a,
     )
     conn.commit()
+
+
+def existing_podcast_guids(conn: sqlite3.Connection) -> set[str]:
+    return {row["guid"] for row in conn.execute("SELECT guid FROM podcast_episodes")}
+
+
+def save_podcast_episode(conn: sqlite3.Connection, e: dict[str, Any]) -> None:
+    conn.execute(
+        """INSERT OR REPLACE INTO podcast_episodes
+        (guid, source, show_name, show_link, title, description, rewritten_title,
+         rewritten_summary, audio_url, duration, image_url, pub_date, verify_status, first_seen)
+        VALUES (:guid, :source, :show_name, :show_link, :title, :description,
+                :rewritten_title, :rewritten_summary, :audio_url, :duration,
+                :image_url, :pub_date, :verify_status, :first_seen)""",
+        e,
+    )
+    conn.commit()
+
+
+def recent_podcast_episodes(conn: sqlite3.Connection, limit: int = 20) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM podcast_episodes ORDER BY first_seen DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_article_by_slug(conn: sqlite3.Connection, slug: str) -> dict | None:

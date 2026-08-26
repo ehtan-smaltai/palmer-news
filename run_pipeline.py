@@ -48,6 +48,7 @@ from build_site import (
     write_article_page,
     write_category_page,
     write_llms_txt,
+    write_opinion_page,
     write_page,
     write_prediction_page,
     write_robots_txt,
@@ -57,9 +58,19 @@ from corroboration import cluster_articles, evaluate_cluster
 from detail_article import build_detail_article, select_primary
 from fetch_news import fetch_news
 from fetch_pexels import fetch_fallback_image
+from fetch_podcasts import fetch_podcast_episodes
 from fetch_polymarket import fetch_polymarket_markets
 from match_article_to_market import match_article
-from store import existing_guids, get_conn, recent_articles, save_article
+from rewrite_news import rewrite_article
+from store import (
+    existing_guids,
+    existing_podcast_guids,
+    get_conn,
+    recent_articles,
+    recent_podcast_episodes,
+    save_article,
+    save_podcast_episode,
+)
 
 # Finance (stock quotes) is deliberately not fetched/rendered right now —
 # founder feedback: no point showing plain numbers until there's a real
@@ -109,7 +120,7 @@ def run(sources: list[str] | None = None) -> dict:
     started_at = time.time()
     stats = {"fetched": 0, "clusters": 0, "new_stories": 0, "held_back": 0,
               "detail_generated": 0, "verify_failed": 0, "matched": 0,
-              "skipped_existing": 0, "fallback_images": 0}
+              "skipped_existing": 0, "fallback_images": 0, "new_episodes": 0}
 
     print(f"Fetching news from {sources or 'all'} sources...")
     fetched = fetch_news(limit_per_feed=8, sources=sources)
@@ -189,6 +200,28 @@ def run(sources: list[str] | None = None) -> dict:
 
         if story.get("detail_body") and story.get("slug"):
             write_article_page(story, matched_market)
+
+    print("Fetching podcast episodes...")
+    already_seen_podcasts = existing_podcast_guids(conn)
+    fetched_episodes = fetch_podcast_episodes(limit_per_show=3)
+    new_episode_count = 0
+    for ep in fetched_episodes:
+        if ep["guid"] in already_seen_podcasts:
+            continue
+        new_episode_count += 1
+        ep = rewrite_article(ep)  # same grounding+verify pass as news, just for the blurb
+        ep["first_seen"] = time.time()
+        save_podcast_episode(conn, {
+            "guid": ep["guid"], "source": ep["source"], "show_name": ep["show_name"],
+            "show_link": ep["show_link"], "title": ep["title"], "description": ep.get("description"),
+            "rewritten_title": ep.get("rewritten_title"), "rewritten_summary": ep.get("rewritten"),
+            "audio_url": ep["audio_url"], "duration": ep.get("duration"), "image_url": ep.get("image_url"),
+            "pub_date": ep.get("pub_date"), "verify_status": ep.get("verify_status", "not_attempted"),
+            "first_seen": ep["first_seen"],
+        })
+    stats["new_episodes"] = new_episode_count
+    print(f"  {len(fetched_episodes)} episodes fetched, {new_episode_count} new")
+    write_opinion_page(recent_podcast_episodes(conn, limit=20))
 
     print("Rendering homepage from accumulated history...")
     articles_for_render = recent_articles(conn, limit=40)

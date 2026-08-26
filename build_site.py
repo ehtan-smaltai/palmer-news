@@ -24,6 +24,7 @@ CATEGORY_PAGES = {
     "TECHNOLOGY": "technology.html",
     "ENTERTAINMENT": "entertainment.html",
     "SPORTS": "sports.html",
+    "OPINION": "opinion.html",
     "PREDICTION": "prediction.html",
 }
 ARTICLE_CATEGORIES = ["MARKET", "FINANCE", "TECHNOLOGY", "ENTERTAINMENT", "SPORTS"]
@@ -283,6 +284,20 @@ SHARED_CSS = """
     font-size: 0.9rem; }
   .pred-table a { color: var(--ink); text-decoration: none; }
   .pred-table a:hover { text-decoration: underline; }
+  .episode-card { border: 1px solid var(--rule); border-radius: 8px; padding: 1.2rem;
+    margin-bottom: 1.5rem; display: flex; gap: 1.2rem; }
+  .episode-art { width: 90px; height: 90px; object-fit: cover; border-radius: 6px; flex-shrink: 0; }
+  .episode-body { flex: 1; min-width: 0; }
+  .episode-show { font-family: 'JetBrains Mono', monospace; font-size: 0.68rem;
+    letter-spacing: 0.06em; color: var(--accent); text-transform: uppercase; }
+  .episode-show a { color: inherit; text-decoration: none; }
+  .episode-show a:hover { text-decoration: underline; }
+  .episode-title { font-family: Georgia, serif; font-size: 1.1rem; margin: 0.3rem 0 0.4rem; }
+  .episode-summary { font-size: 0.88rem; color: #444; line-height: 1.5; margin: 0 0 0.6rem; }
+  .episode-duration { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: var(--muted);
+    margin-bottom: 0.4rem; }
+  audio { width: 100%; height: 32px; }
+  @media (max-width: 600px) { .episode-card { flex-direction: column; } .episode-art { width: 100%; height: 160px; } }
   footer { border-top: 2px solid var(--ink); padding: 1.5rem 0; margin-top: 2rem;
     font-size: 0.7rem; color: var(--muted); font-family: 'JetBrains Mono', monospace;
     text-align: center; }
@@ -517,6 +532,99 @@ def render_prediction_page(markets: list[dict]) -> str:
         rows="\n        ".join(rows) or "<tr><td colspan=3>No market data.</td></tr>",
         generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
     )
+
+
+def _seconds_to_hms(duration: str | None) -> str:
+    """iTunes duration is either already HH:MM:SS/MM:SS, or a bare seconds
+    count (BBC's feed does this) — normalize both to MM:SS or H:MM:SS."""
+    if not duration:
+        return ""
+    if ":" in duration:
+        return duration
+    try:
+        total = int(duration)
+    except ValueError:
+        return duration
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def _episode_card_html(e: dict) -> str:
+    """Unlike articles, we credit the source explicitly and link to the
+    show — we're streaming their actual audio file, not replacing it with
+    our own words, so attribution is appropriate here (see
+    fetch_podcasts.py docstring)."""
+    title = html.escape(_truncate(e.get("rewritten_title") or clean_title(e["title"]), 140))
+    summary = html.escape(_truncate(e.get("rewritten_summary") or e.get("description") or "", 220))
+    show_name = html.escape(e.get("show_name", ""))
+    show_link = e.get("show_link") or "#"
+    duration = _seconds_to_hms(e.get("duration"))
+    art = f'<img class="episode-art" src="{html.escape(e["image_url"])}" alt="{show_name}" loading="lazy">' if e.get("image_url") else ""
+    audio_url = html.escape(e.get("audio_url", ""))
+
+    return f"""
+    <div class="episode-card">
+      {art}
+      <div class="episode-body">
+        <div class="episode-show">🎧 <a href="{show_link}" target="_blank" rel="noopener">{show_name}</a></div>
+        <h3 class="episode-title">{title}</h3>
+        {f'<div class="episode-duration">{duration}</div>' if duration else ''}
+        <p class="episode-summary">{summary}</p>
+        <audio controls preload="none">
+          <source src="{audio_url}" type="audio/mpeg">
+          Your browser doesn't support inline audio — <a href="{audio_url}">download the episode</a>.
+        </audio>
+      </div>
+    </div>"""
+
+
+OPINION_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+{head}
+</head>
+<body>
+  <div class="wrap topbar"><div>{today}</div></div>
+  <div class="masthead"><a href="index.html">{site_name}</a></div>
+  <nav class="catnav">
+    {nav_links}
+  </nav>
+  <div class="wrap grid-section">
+    <h2>Opinion</h2>
+    <p style="color: var(--muted); font-size: 0.9rem;">What people are actually saying — real \
+commentary and analysis from named shows, streamed directly from the publisher. Not rewritten \
+(audio can't be, without re-recording it) — that's why these are credited, unlike the news cards.</p>
+    {cards}
+  </div>
+  <footer class="wrap">Generated {generated_at} UTC &nbsp;·&nbsp; Audio streamed directly from each show's own host, not rehosted &nbsp;·&nbsp; This is a development spike, not a published site.</footer>
+</body>
+</html>
+"""
+
+
+def render_opinion_page(episodes: list[dict]) -> str:
+    cards = "\n".join(_episode_card_html(e) for e in episodes) or "<p>No episodes yet.</p>"
+    head = _head_html(
+        title=f"Opinion — {SITE_NAME}",
+        description="Real commentary and analysis podcasts, streamed directly from the publisher.",
+        canonical_path=CATEGORY_PAGES["OPINION"],
+    )
+    return OPINION_TEMPLATE.format(
+        head=head,
+        today=datetime.now(timezone.utc).strftime("%A, %B %d, %Y").upper(),
+        site_name=SITE_NAME,
+        nav_links=_nav_html(active="OPINION"),
+        cards=cards,
+        generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+    )
+
+
+def write_opinion_page(episodes: list[dict]) -> Path:
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    out_path = OUTPUT_DIR / CATEGORY_PAGES["OPINION"]
+    out_path.write_text(render_opinion_page(episodes), encoding="utf-8")
+    return out_path
 
 
 def write_prediction_page(markets: list[dict]) -> Path:
