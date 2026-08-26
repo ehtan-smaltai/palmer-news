@@ -131,14 +131,28 @@ def _permalink(a: dict, prefix: str = "") -> str | None:
     return f"{prefix}articles/{slug}.html" if slug else None
 
 
+def _truncate(text: str, max_chars: int) -> str:
+    """Card-display truncation only — the stored data and detail-page body
+    are never touched, this just keeps grid cards a consistent height.
+    Some sources (Guardian especially) give teasers several times longer
+    than BBC's one-liners — confirmed 2026-08-26: an 893-char Guardian
+    excerpt (still a legitimate bounded teaser, not full-article
+    reproduction — it ends with their own "Continue reading…" marker) was
+    blowing out the 3-column grid's visual balance."""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rsplit(" ", 1)[0] + "…"
+
+
 def _article_html(a: dict, size: str, link_prefix: str = "") -> str:
     """size: 'hero' | 'medium' | 'small'. Hosted fully on our own page (no
     reroute) — headlines are the Bedrock-rewritten version where available.
     No per-article category tag (removed per founder feedback — the nav
     already carries category, no need to repeat it per card); a timestamp
     replaces it instead."""
-    title = html.escape(a.get("rewritten_title") or a["title"])
-    dek = html.escape(a.get("rewritten_summary") or a.get("rewritten") or a.get("description") or "")
+    title = html.escape(_truncate(a.get("rewritten_title") or a["title"], 140))
+    dek_limit = 280 if size == "hero" else 160
+    dek = html.escape(_truncate(a.get("rewritten_summary") or a.get("rewritten") or a.get("description") or "", dek_limit))
     widget = _market_widget_html(a["matched_market"]) if a.get("matched_market") else ""
     link = _permalink(a, link_prefix)
     title_html = f'<a href="{link}">{title}</a>' if link else title
@@ -233,7 +247,11 @@ SHARED_CSS = """
   .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2.2rem; }
   .story-medium h3 { font-family: Georgia, serif; font-size: 1.15rem;
     line-height: 1.3; margin: 0.2rem 0 0.5rem; }
-  .dek-small { font-size: 0.88rem; color: #444; line-height: 1.5; margin: 0; }
+  .dek-small { font-size: 0.88rem; color: #444; line-height: 1.5; margin: 0;
+    display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical;
+    overflow: hidden; }
+  .story-medium h3 a, .hero-story h1 a { display: -webkit-box; -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical; overflow: hidden; }
   .prediction-tag { margin-top: 0.7rem; padding: 0.55rem 0.7rem; background: #fdf1ee;
     border-left: 3px solid var(--accent); font-size: 0.78rem; }
   .prediction-label { font-family: 'JetBrains Mono', monospace; font-size: 0.6rem;
