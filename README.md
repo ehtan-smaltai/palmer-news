@@ -65,6 +65,20 @@ python manage_keys.py list                     # usage per key (masked)
 python manage_keys.py revoke <key>              # deactivate a key
 ```
 
+### CLI
+
+`palmer_cli.py` is a thin client over the same REST API — headless-friendly,
+`--json` on every read command for piping into scripts/`jq`, exit code 1 on
+any API/auth error.
+
+```bash
+python palmer_cli.py config set-key <key>
+python palmer_cli.py articles --category MARKET --q "Iran" --limit 10
+python palmer_cli.py article <slug>
+python palmer_cli.py markets --limit 20
+python palmer_cli.py categories
+```
+
 ## Architecture notes worth knowing before touching this
 
 - **Network**: Polymarket's API is unreachable from some networks (confirmed

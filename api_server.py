@@ -121,7 +121,7 @@ def _row_to_summary(row: dict) -> ArticleSummary:
         slug=slug,
         category=row.get("category", ""),
         headline=row.get("rewritten_title") or row.get("title", ""),
-        summary=row.get("rewritten_summary"),
+        summary=row.get("rewritten_summary") or row.get("description"),
         image_url=row.get("image_url"),
         published_at=_iso_when(row) or None,
         source_count=row.get("source_count", 1),
@@ -226,7 +226,7 @@ def article_detail(slug: str):
 
     return ArticleDetail(
         **summary.model_dump(),
-        body=row.get("detail_body") or row.get("rewritten_summary"),
+        body=row.get("detail_body") or row.get("rewritten_summary") or row.get("description"),
         sources=sources,
     )
 
