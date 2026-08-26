@@ -20,12 +20,14 @@ from __future__ import annotations
 import time
 import traceback
 from datetime import datetime, timezone
+from pathlib import Path
 
 import run_pipeline
 from fetch_news import FEEDS
 
 GROUP_COUNT = 5
 TICK_INTERVAL_S = (30 * 60) // GROUP_COUNT  # 360s = 6 min
+HEARTBEAT_FILE = Path(__file__).parent / "data" / "scheduler_heartbeat.txt"
 
 
 def _build_groups() -> list[list[str]]:
@@ -51,6 +53,8 @@ def main() -> None:
     while True:
         group = groups[tick % GROUP_COUNT]
         started = datetime.now(timezone.utc).isoformat()
+        HEARTBEAT_FILE.parent.mkdir(exist_ok=True)
+        HEARTBEAT_FILE.write_text(started)  # watchdog.py checks this to detect a dead process
         print(f"\n[scheduler] tick {tick} (group {tick % GROUP_COUNT} = {group}) starting at {started}")
         try:
             run_pipeline.run(sources=group)
